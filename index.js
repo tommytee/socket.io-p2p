@@ -13,11 +13,13 @@ var rtcSupport = require('webrtcsupport')
 var emitfn = Emitter.prototype.emit
 
 function Socketiop2p (socket, opts, cb) {
+
   var self = this
+
   self.useSockets = true
   self.usePeerConnection = false
-  self.decoder = new parser.Decoder(this)
-  self.decoder.on('decoded', bind(this, this.ondecoded))
+  self.decoder = new parser.Decoder( this )
+  self.decoder.on( 'decoded', bind( this, this.ondecoded ) )
   self.socket = socket
   self.cb = cb
   self._peers = {}
@@ -34,110 +36,150 @@ function Socketiop2p (socket, opts, cb) {
     autoUpgrade: true,
     numClients: 5
   }
-  self.opts = extend(defaultOpts, (opts || {}))
+  self.opts = extend( defaultOpts, (opts || {}) )
   self.peerOpts = self.opts.peerOpts || {}
-  self.numConnectedClients
 
-  socket.on('numClients', function (numClients) {
+  // < - - - - - - - - - - - - - - >
+  socket.on( 'numClients', function ( data ) {
+
+    console.log( 'numClients', data.numClients, 'useSockets', data.useSockets );
+
     self.peerId = socket.io.engine.id
-    self.numConnectedClients = numClients
-    if (rtcSupport.supportDataChannel) {
-      generateOffers(function (offers) {
+    self.useSockets = data.useSockets
+    self.numConnectedClients = data.numClients
+
+    if ( rtcSupport.supportDataChannel ) {
+
+      generateOffers( function ( offers ) {
         var offerObj = {
           offers: offers,
           fromPeerId: self.peerId
         }
-        socket.emit('offers', offerObj)
-      })
+        socket.emit( 'offers', offerObj )
+      } )
+
+    } else {
+
+      //console.log( 'WebRTC not available :(' )
+
+      socket.emit( 'noRTC', self.peerId )
+
     }
 
-    function generateOffers (cb) {
+    function generateOffers ( cb ) {
+
       var offers = []
-      for (var i = 0; i < self.opts.numClients; ++i) {
+
+      for ( var i = 0; i < self.opts.numClients; ++ i ) {
         generateOffer()
       }
+
       function generateOffer () {
-        var offerId = hat(160)
-        var peerOpts = extend(self.peerOpts, {initiator: true})
-        var peer = self._peers[offerId] = new Peer(peerOpts)
-        peer.setMaxListeners(50)
-        self.setupPeerEvents(peer)
-        peer.on('signal', function (offer) {
-          offers.push({
+
+        var offerId = hat( 160 )
+        var peerOpts = extend( self.peerOpts, { initiator: true } )
+        var peer = self._peers[ offerId ] = new Peer( peerOpts )
+
+        peer.setMaxListeners( 50 )
+        self.setupPeerEvents( peer )
+
+        peer.on( 'signal', function ( offer ) {
+          offers.push( {
             offer: offer,
             offerId: offerId
-          })
+          } )
           checkDone()
-        })
+        } )
 
-        peer.on('error', function (err) {
-          emitfn.call(this, 'peer-error', err)
-          debug('Error in peer %s', err)
-        })
+        peer.on( 'error', function ( err ) {
+          emitfn.call( this, 'peer-error', err )
+          debug( 'Error in peer %s', err )
+        } )
       }
 
       function checkDone () {
-        if (offers.length === self.opts.numClients) {
-          debug('generated %s offers', self.opts.numClients)
-          cb(offers)
+        if ( offers.length === self.opts.numClients ) {
+          debug( 'generated %s offers', self.opts.numClients )
+          cb( offers )
         }
       }
     }
-  })
 
-  socket.on('offer', function (data) {
-    var peerOpts = extend(self.peerOpts, {initiator: false})
-    var peer = self._peers[data.fromPeerId] = new Peer(peerOpts)
-    self.numConnectedClients++
-    peer.setMaxListeners(50)
-    self.setupPeerEvents(peer)
-    peer.on('signal', function (signalData) {
-      var signalObj = {
-        signal: signalData,
-        offerId: data.offerId,
-        fromPeerId: self.peerId,
-        toPeerId: data.fromPeerId
-      }
-      socket.emit('peer-signal', signalObj)
-    })
+  } )
 
-    peer.on('error', function (err) {
-      emitfn.call(this, 'peer-error', err)
-      debug('Error in peer %s', err)
-    })
-    peer.signal(data.offer)
-  })
+  if ( rtcSupport.supportDataChannel ) {
 
-  socket.on('peer-signal', function (data) {
-    // Select peer from offerId if exists
-    var peer = self._peers[data.offerId] || self._peers[data.fromPeerId]
-    if (peer !== undefined) {
-      peer.on('signal', function signal (signalData) {
+    // < - - - - - - - - - - - - - - >
+    socket.on( 'useSockets', function ( data ) {
+
+      console.log( 'useSockets', data )
+      self.useSockets = data
+    } )
+
+    // < - - - - - - - - - - - - - - >
+    socket.on( 'offer', function ( data ) {
+
+      var peerOpts = extend( self.peerOpts, { initiator: false } )
+      var peer = self._peers[ data.fromPeerId ] = new Peer( peerOpts )
+
+      self.numConnectedClients ++
+      peer.setMaxListeners( 50 )
+      self.setupPeerEvents( peer )
+
+      peer.on( 'signal', function ( signalData ) {
         var signalObj = {
           signal: signalData,
           offerId: data.offerId,
           fromPeerId: self.peerId,
           toPeerId: data.fromPeerId
         }
-        socket.emit('peer-signal', signalObj)
-      })
+        socket.emit( 'peer-signal', signalObj )
+      } )
 
-      peer.signal(data.signal)
-    }
-  })
+      peer.on( 'error', function ( err ) {
+        emitfn.call( this, 'peer-error', err )
+        debug( 'Error in peer %s', err )
+      } )
 
-  self.on('peer_ready', function (peer) {
-    self.readyPeers++
-    if (self.readyPeers >= self.numConnectedClients && !self.ready) {
-      self.ready = true
-      self.emit('upgrade')
-    }
-  })
+      peer.signal( data.offer )
 
-  self.on('upgrade', function () {
-    if (self.opts.autoUpgrade) self.usePeerConnection = true
-    if (typeof self.cb === 'function') self.cb()
-  })
+    } )
+
+    // < - - - - - - - - - - - - - - >
+    socket.on( 'peer-signal', function ( data ) {
+      // Select peer from offerId if exists
+      var peer = self._peers[ data.offerId ] || self._peers[ data.fromPeerId ]
+      if ( peer !== undefined ) {
+        peer.on( 'signal', function signal ( signalData ) {
+          var signalObj = {
+            signal: signalData,
+            offerId: data.offerId,
+            fromPeerId: self.peerId,
+            toPeerId: data.fromPeerId
+          }
+          socket.emit( 'peer-signal', signalObj )
+        } )
+
+        peer.signal( data.signal )
+      }
+    } )
+
+    // < - - - - - - - - >
+    self.on( 'peer_ready', function ( peer ) {
+      self.readyPeers ++
+      if ( self.readyPeers >= self.numConnectedClients && ! self.ready ) {
+        self.ready = true
+        self.emit( 'upgrade' )
+      }
+    } )
+
+    // < - - - - - - - - >
+    self.on( 'upgrade', function () {
+      if ( self.opts.autoUpgrade ) self.usePeerConnection = true
+      if ( typeof self.cb === 'function' ) self.cb()
+    } )
+
+  }
 }
 
 Emitter(Socketiop2p.prototype)
@@ -145,15 +187,25 @@ Emitter(Socketiop2p.prototype)
 Socketiop2p.prototype.setupPeerEvents = function (peer) {
   var self = this
 
+  // < - - - - - - - - - - >
+  peer.on('close', function (peer) {
+
+    console.log('p2p peer left')
+
+  })
+
+  // < - - - - - - - - - - >
   peer.on('connect', function (peer) {
     self.emit('peer_ready', peer)
   })
 
+  // < - - - - - -- - - - - >
   peer.on('data', function (data) {
     if (this.destroyed) return
     self.decoder.add(JSON.parse(data))
   })
 
+  // < - - - - -- - - - - - >
   peer.on('stream', function (stream) {
     self.emit('stream', stream)
   })
@@ -163,42 +215,76 @@ Socketiop2p.prototype.setupPeerEvents = function (peer) {
  * Overwride the inheritted 'on' method to add a listener to the socket instance
  * that emits the event on the Socketio event loop
 **/
-
 Socketiop2p.prototype.on = function (type, listener) {
-  var self = this
-  this.socket.addEventListener(type, function (data) {
-    emitfn.call(self, type, data)
-  })
+
+  this.socket.addEventListener(type, listener)
   this.addEventListener(type, listener)
 }
 
+// < - - - - - - - - - - - - - - >
 Socketiop2p.prototype.emit = function (data, cb) {
+
   var self = this
   var argsObj = cb || {}
   var encoder = new parser.Encoder()
 
-  if (this._peerEvents.hasOwnProperty(data) || argsObj.fromSocket) {
-    emitfn.apply(this, arguments)
-  } else if (this.usePeerConnection || !this.useSockets) {
-    var args = toArray(arguments)
-    var parserType = parser.EVENT // default
-    if (hasBin(args)) { parserType = parser.BINARY_EVENT } // binary
-    var packet = { type: parserType, data: args }
+  if ( this._peerEvents.hasOwnProperty(data) || argsObj.fromSocket ) {
 
-    encoder.encode(packet, function (encodedPackets) {
-      if (encodedPackets[1] instanceof ArrayBuffer) {
-        self._sendArray(encodedPackets)
-      } else if (encodedPackets) {
-        for (var i = 0; i < encodedPackets.length; i++) {
-          self._send(encodedPackets[i])
+    //console.log('m1', arguments);
+
+    emitfn.apply(this, arguments)
+
+  } else if ( rtcSupport.supportDataChannel ) {
+
+    if ( self.useSockets ) {
+
+      console.log('sending socket');
+
+      this.socket.emit( 'forPeerless', { name: data, msg: cb })
+
+    }
+
+    if ( Object.keys( this._peers ).length > 0 ) {
+
+      //console.log('sending p2p');
+
+      var args = toArray(arguments)
+
+      var parserType = parser.EVENT // default
+
+      if (hasBin(args))
+        parserType = parser.BINARY_EVENT  // binary
+
+      var packet = { type: parserType, data: args }
+
+      encoder.encode(packet, function (encodedPackets) {
+
+        if (encodedPackets[1] instanceof ArrayBuffer) {
+
+          self._sendArray(encodedPackets)
+
+        } else if (encodedPackets) {
+
+          for (var i = 0; i < encodedPackets.length; i++) {
+            self._send(encodedPackets[i])
+          }
+
+        } else {
+
+          throw new Error('Encoding error')
         }
-      } else {
-        throw new Error('Encoding error')
-      }
-    })
+      })
+
+    }
+
   } else {
-    this.socket.emit(data, cb)
+
+    //console.log('sending socket')
+
+    this.socket.emit( 'forAll', { name: data, msg: cb })
+
   }
+
 }
 
 /**
@@ -208,23 +294,31 @@ Socketiop2p.prototype.emit = function (data, cb) {
 **/
 
 Socketiop2p.prototype._sendArray = function (arr) {
+
   var firstPacket = arr[0]
   var interval = 5000
   var arrLength = arr[1].byteLength
   var nChunks = Math.ceil(arrLength / interval)
   var packetData = firstPacket.substr(0, 1) + nChunks + firstPacket.substr(firstPacket.indexOf('-'))
+
   this._send(packetData)
   this.binarySlice(arr[1], interval, this._send)
+
 }
 
+// < - - - - - - - - - - - - - - - - - - - - - - >
 Socketiop2p.prototype._send = function (data) {
+
   var self = this
+
   for (var peerId in self._peers) {
+
     var peer = self._peers[peerId]
-    if (peer._channelReady) {
+
+    if (peer._channelReady)
       peer.send(JSON.stringify(data))
-    }
   }
+
 }
 
 Socketiop2p.prototype.binarySlice = function (arr, interval, callback) {
@@ -240,18 +334,16 @@ Socketiop2p.prototype.ondecoded = function (packet) {
 }
 
 Socketiop2p.prototype.disconnect = function () {
+
+  console.log( '--> peer disconnect')
+
   for (var peerId in this._peers) {
-    var peer = this._peers[peerId]
-    peer.destroy()
+
+    this._peers[peerId].destroy()
+
     this.socket.disconnect()
   }
-}
 
-/**
- * Use peerConnection instead of socket.io one.
-**/
-Socketiop2p.prototype.upgrade = function () {
-  this.usePeerConnection = true
 }
 
 module.exports = Socketiop2p
